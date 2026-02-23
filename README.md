@@ -5,9 +5,7 @@
 
 **Ubuntu Manpages Operator** is a [charm](https://juju.is/charms-architecture) for deploying [https://manpages.ubuntu.com](https://manpages.ubuntu.com), a site which contains thousands of dynamically generated manuals, extracted from every supported version of Ubuntu and updated on a regular basis.
 
-This reposistory contains both the [application code](./app) and the code for the [charm](./src).
-
-The application code was taken from the [original Launchpad repository](https://launchpad.net/ubuntu-manpage-repository), with some minor modifications to make it more easily configurable with the charm.
+This reposistory contains both the [application code](./cmd) and the code for the [charm](./src).
 
 ## Basic usage
 
@@ -21,17 +19,14 @@ Once the charm is deployed, you can check the status with Juju status:
 
 ```bash
 ❯ juju status
-Model    Controller           Cloud/Region         Version  SLA          Timestamp
-testing  localhost-localhost  localhost/localhost  3.6.6    unsupported  11:06:36+01:00
+Model     Controller     Cloud/Region  Version  SLA          Timestamp
+manpages  concierge-k8s  k8s           3.6.14   unsupported  19:05:33Z
 
-App              Version  Status       Scale  Charm            Channel  Rev  Exposed  Message
-ubuntu-manpages           maintenance      1  ubuntu-manpages             0  no       Updating manpages
+App              Version  Status       Scale  Charm            Channel  Rev  Address        Exposed  Message
+ubuntu-manpages           maintenance      1  ubuntu-manpages             1  10.152.183.84  no       Updating manpages
 
-Unit                Workload     Agent  Machine  Public address  Ports     Message
-ubuntu-manpages/0*  maintenance  idle   1        10.245.163.53   8080/tcp  Updating manpages
-
-Machine  State    Address        Inst id        Base          AZ  Message
-1        started  10.245.163.53  juju-3a79fc-4  ubuntu@24.04      Running
+Unit                Workload     Agent  Address     Ports  Message
+ubuntu-manpages/0*  maintenance  idle   10.1.0.163         Updating manpages
 ```
 
 You can see from the status that the application has been assigned an IP address, and is listening on port 8080. Using the example above, browsing to `http://10.245.163.53:8080` would display the homepage for the application.
@@ -59,15 +54,13 @@ The charm supports integrations with ingress/proxy services using the `ingress` 
 ```bash
 # Deploy the charms
 ❯ juju deploy ubuntu-manpages
-❯ juju deploy haproxy --channel 2.8/edge --config external-hostname=manpages.internal
-❯ juju deploy self-signed-certificates --channel 1/edge
+❯ juju deploy traefik-k8s --trust --config external-hostname=manpages.internal
 
 # Create integrations
-❯ juju integrate ubuntu-manpages haproxy
-❯ juju integrate self-signed-certificates haproxy
+❯ juju integrate ubuntu-manpages traefik-k8s
 
 # Test the proxy integration
-❯ curl -k -H "Host: manpages.internal" https://<haproxy-ip>/<model-name>-ubuntu-manpages
+❯ curl -k -H "Host: manpages.internal" https://<traefik-ip>/<model-name>-ubuntu-manpages
 ```
 
 The scenario described above is demonstrated [in the integration tests](./tests/integration/test_ingress.py).
@@ -75,10 +68,11 @@ The scenario described above is demonstrated [in the integration tests](./tests/
 ## Deployment requirements
 
 As of 2025-07-30, the deployment requirements have been observed to be the following:
-* Configured releases: Jammy, Noble, Plucky, Questing
-* Disk space used in the `/app/www` folder: `9.4GiB`
-* Size of a single release in that folder: `~1.7GiB` (HTML) + `~750MiB` (.gz manpages)
-* Stats from the systemd service, on a 4 cores VM: `update-manpages.service: Consumed 1d 2h 50min 47.755s CPU time, 4.7G memory peak, 0B memory swap peak.`
+
+- Configured releases: Jammy, Noble, Plucky, Questing
+- Disk space used in the `/app/www` folder: `9.4GiB`
+- Size of a single release in that folder: `~1.7GiB` (HTML) + `~750MiB` (.gz manpages)
+- Stats from the systemd service, on a 4 cores VM: `update-manpages.service: Consumed 1d 2h 50min 47.755s CPU time, 4.7G memory peak, 0B memory swap peak.`
 
 ## Contribute to Ubuntu Manpages Operator
 
