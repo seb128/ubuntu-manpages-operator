@@ -1,7 +1,7 @@
 {
   "site": "http://manpages.ubuntu.com",
   "archive": "http://archive.ubuntu.com/ubuntu",
-  "public_html_dir": "/home/jon/data/manpages",
+  "public_html_dir": "/app/www",
   "releases": {
     "bionic": "20.04",
     "jammy": "22.04",
