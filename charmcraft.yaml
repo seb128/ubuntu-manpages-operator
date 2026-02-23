@@ -37,12 +37,13 @@ parts:
       git describe --always > $CRAFT_PART_INSTALL/version
 
   manpages-app:
-    plugin: dump
-    source: app
-    organize:
-      bin: app/bin
-      www: app/www
-      config: app/config
+    plugin: go
+    source: .
+    build-snaps:
+      - go/1.25/stable
+    stage:
+      - bin/ingest
+      - bin/server
 
   files:
     plugin: dump
