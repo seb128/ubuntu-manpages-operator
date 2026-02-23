@@ -6,18 +6,15 @@
 
 import logging
 import socket
-from subprocess import CalledProcessError
 
 import ops
-from charms.operator_libs_linux.v0.apt import PackageError, PackageNotFoundError
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer as IngressRequirer
+from ops.pebble import APIError, ConnectionError, ProtocolError
 
 from launchpad import LaunchpadClient
-from manpages import Manpages
+from manpages import PORT, Manpages
 
 logger = logging.getLogger(__name__)
-
-PORT = 8080
 
 
 class ManpagesCharm(ops.CharmBase):
@@ -25,11 +22,18 @@ class ManpagesCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        self.ingress = IngressRequirer(self, port=PORT, strip_prefix=True, relation_name="ingress")
+        framework.observe(self.on.manpages_pebble_ready, self._on_manpages_pebble_ready)
 
-        framework.observe(self.on.install, self._on_install)
-        framework.observe(self.on.start, self._on_start)
-        framework.observe(self.on.upgrade_charm, self._on_install)
+        self._container = self.unit.get_container("manpages")
+        self._manpages = Manpages(LaunchpadClient(), self._container)
+
+        self.ingress = IngressRequirer(
+            self,
+            host=f"{self.app.name}.{self.model.name}.svc.cluster.local",
+            port=PORT,
+            strip_prefix=True,
+        )
+
         framework.observe(self.on.update_status, self._on_update_status)
         framework.observe(self.on.update_manpages_action, self._on_config_changed)
         framework.observe(self.on.config_changed, self._on_config_changed)
@@ -39,21 +43,18 @@ class ManpagesCharm(ops.CharmBase):
         framework.observe(self.ingress.on.ready, self._on_config_changed)
         framework.observe(self.ingress.on.revoked, self._on_config_changed)
 
-        self._manpages = Manpages(LaunchpadClient())
-
-    def _on_install(self, event: ops.InstallEvent):
-        """Install the packages and configuration for ubuntu-manpages."""
-        self.unit.status = ops.MaintenanceStatus("Installing manpages")
-        try:
-            self._manpages.install()
-        except (CalledProcessError, PackageError, PackageNotFoundError):
-            self.unit.status = ops.BlockedStatus(
-                "Failed to install packages. Check `juju debug-log` for details."
-            )
+    def _on_manpages_pebble_ready(self, event: ops.PebbleReadyEvent):
+        """Add the manpages layer to Pebble and start the services."""
+        self._replan_workload()
 
     def _on_config_changed(self, event):
         """Update configuration and fetch relevant manpages."""
         self.unit.status = ops.MaintenanceStatus("Updating configuration")
+        self._replan_workload()
+
+    def _replan_workload(self):
+        container = self._container
+
         try:
             self._manpages.configure(str(self.config["releases"]), self._get_external_url())
         except ValueError:
@@ -61,39 +62,45 @@ class ManpagesCharm(ops.CharmBase):
                 "Invalid configuration. Check `juju debug-log` for details."
             )
             return
+        except (ProtocolError, ConnectionError, APIError) as e:
+            logger.error("failed to configure manpages app: %s", e)
+            self.unit.status = ops.BlockedStatus(
+                "Failed to connect to workload container. Check `juju debug-log` for details."
+            )
+            return
+
+        try:
+            container.add_layer("manpages", self._manpages.pebble_layer(), combine=True)
+            container.replan()
+        except (ConnectionError, ProtocolError, APIError) as e:
+            logger.error("failed to add manpages layer to pebble: %s", e)
+            self.unit.status = ops.BlockedStatus(
+                "Failed to connect to workload container. Check `juju debug-log` for details."
+            )
+            return
+
+        self.unit.open_port(protocol="tcp", port=PORT)
 
         self.unit.status = ops.MaintenanceStatus("Updating manpages")
         try:
             self._manpages.update_manpages()
-        except CalledProcessError:
-            self.unit.status = ops.MaintenanceStatus(
-                "Failed to update manpages. Check `juju debug-log` for details."
-            )
-
-    def _on_start(self, event: ops.StartEvent):
-        """Start the manpages service."""
-        self.unit.status = ops.MaintenanceStatus("Starting manpages")
-        try:
-            self._manpages.restart()
-        except CalledProcessError:
+        except (ProtocolError, ConnectionError, APIError) as e:
+            logger.error("failed to ingest manpages: %s", e)
             self.unit.status = ops.BlockedStatus(
-                "Failed to start services. Check `juju debug-log` for details."
+                "Failed to connect to workload container. Check `juju debug-log` for details."
             )
             return
 
-        self.unit.set_ports(PORT)
-
-        if self._manpages.updating:
-            self.unit.status = ops.MaintenanceStatus("Updating manpages")
-        else:
-            self.unit.status = ops.ActiveStatus()
-
     def _on_update_status(self, event: ops.UpdateStatusEvent):
         """Update status."""
+        self.unit.status = self._get_status()
+
+    def _get_status(self) -> ops.StatusBase:
+        """Return the current status of the unit."""
         if self._manpages.updating:
-            self.unit.status = ops.MaintenanceStatus("Updating manpages")
+            return ops.MaintenanceStatus("Updating manpages")
         else:
-            self.unit.status = ops.ActiveStatus()
+            return ops.ActiveStatus()
 
     def _get_external_url(self) -> str:
         """Report URL to access Ubuntu Manpages."""

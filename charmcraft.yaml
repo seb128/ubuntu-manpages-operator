@@ -24,6 +24,9 @@ base: ubuntu@24.04
 platforms:
   amd64:
 
+assumes:
+  - juju >= 3.6
+
 parts:
   manpages-charm:
     plugin: uv
@@ -36,15 +39,6 @@ parts:
       craftctl default
       git describe --always > $CRAFT_PART_INSTALL/version
 
-  manpages-app:
-    plugin: go
-    source: .
-    build-snaps:
-      - go/1.25/stable
-    stage:
-      - bin/ingest
-      - bin/server
-
   files:
     plugin: dump
     source: .
@@ -53,11 +47,23 @@ parts:
       - README.md
       - icon.svg
 
+containers:
+  manpages:
+    resource: manpages-image
+    mounts:
+      - storage: manpages
+        location: /app/www/manpages
+      - storage: manpages-gz
+        location: /app/www/manpages.gz
+
+resources:
+  manpages-image:
+    type: oci-image
+    description: OCI image for manpages service
+    # Included for simplicity in integration tests
+    upstream-source: ghcr.io/canonical/ubuntu-manpages-operator:0.1.0
+
 charm-libs:
-  - lib: operator_libs_linux.apt
-    version: "0"
-  - lib: operator_libs_linux.systemd
-    version: "1"
   - lib: traefik_k8s.ingress
     version: "2"
 
