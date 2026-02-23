@@ -12,14 +12,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v6
       - name: Install dependencies
-        run: |
-          sudo snap install --classic astral-uv
-          sudo snap install shfmt
-          sudo snap install shellcheck
+        run: sudo snap install --classic astral-uv
       - name: Run linters
         run: make lint
 
@@ -28,52 +23,47 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v6
       - name: Install dependencies
-        run: |
-          sudo snap install --classic astral-uv
-          sudo snap install shfmt
-          sudo snap install shellcheck
+        run: sudo snap install --classic astral-uv
       - name: Run tests
         run: make unit
 
-  lib-check:
-    name: Check libraries
+  go-tests:
+    name: Go tests
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6
+      - name: Setup Go
+        uses: actions/setup-go@v6
         with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Check libs
-        uses: canonical/charming-actions/check-libraries@1753e0803f70445132e92acd45c905aba6473225 # 2.7.0
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          go-version-file: "go.mod"
+      - name: Build
+        run: |
+          go build -o bin/ingest ./cmd/ingest
+          go build -o bin/server ./cmd/server
+          go build -o bin/ingest-pkg ./cmd/ingest-pkg
+      - name: Test
+        run: |
+          go test -v -race ./...
 
   pack-charm:
     name: Build charm
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v6
 
       - name: Setup LXD
-        uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee
+        uses: canonical/setup-lxd@main
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
 
       - name: Cache wheels
         id: cache-wheels
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@v5
         with:
           path: /home/runner/snap/charmcraft/common/cache/charmcraft
           key: ${{ runner.os }}-wheel-cache-${{ hashFiles('./uv.lock') }}
@@ -87,21 +77,19 @@ jobs:
         run: charmcraft pack -v
 
       - name: Upload charm artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@v6
         with:
           name: charm
           path: ./*.charm
 
-  define-functional-matrix:
-    name: Define spread functional test matrix
+  define-matrix:
+    name: Define spread matrix
     runs-on: ubuntu-24.04
     outputs:
       suites: ${{ steps.suites.outputs.suites }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v6
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
@@ -109,96 +97,38 @@ jobs:
       - name: Generate matrix list
         id: suites
         run: |
-          list="$(charmcraft.spread -list github-ci:ubuntu-24.04:tests/spread/functional/ | sed "s|github-ci:ubuntu-24.04:tests/spread/functional/||g" | jq -r -ncR '[inputs | select(length>0)]')"
-          echo "suites=$list"
-          echo "suites=$list" >> $GITHUB_OUTPUT
-
-  functional-test:
-    name: Functional Tests - (${{ matrix.suite }})
-    runs-on: ubuntu-24.04
-    needs:
-      - define-functional-matrix
-      - lib-check
-      - lint
-      - pack-charm
-      - unit-test
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(needs.define-functional-matrix.outputs.suites) }}
-    # Allow Juju 4.0 jobs to fail, given that it's in beta
-    continue-on-error: ${{ contains(matrix.suite, 'juju_4_0') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Setup LXD
-        uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee
-
-      - name: Install charmcraft
-        run: sudo snap install charmcraft --classic
-
-      - name: Run functional tests
-        run: |
-          charmcraft.spread -v "github-ci:ubuntu-24.04:tests/spread/functional/${MATRIX_SUITE}"
-        env:
-          MATRIX_SUITE: ${{ matrix.suite }}
-
-  define-integration-matrix:
-    name: Define spread integration test matrix
-    runs-on: ubuntu-24.04
-    outputs:
-      suites: ${{ steps.suites.outputs.suites }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install charmcraft
-        run: sudo snap install charmcraft --classic
-
-      - name: Generate matrix list
-        id: suites
-        run: |
-          list="$(charmcraft.spread -list github-ci:ubuntu-24.04:tests/spread/integration/ | sed "s|github-ci:ubuntu-24.04:tests/spread/integration/||g" | jq -r -ncR '[inputs | select(length>0)]')"
+          list="$(charmcraft.spread --list lxd | sed "s|lxd:ubuntu-24.04:tests/spread/||g" | jq -r -ncR '[inputs | select(length>0)]')"
           echo "suites=$list"
           echo "suites=$list" >> $GITHUB_OUTPUT
 
   integration-test:
-    name: Integration Tests - (${{ matrix.suite }})
-    runs-on: [self-hosted, large, noble, amd64]
+    name: Spread (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
     needs:
-      - define-integration-matrix
-      - lib-check
+      - define-matrix
       - lint
       - pack-charm
       - unit-test
+      - go-tests
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.define-integration-matrix.outputs.suites) }}
+        suite: ${{ fromJSON(needs.define-matrix.outputs.suites) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v6
 
       - name: Download charm artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v4
         with:
           name: charm
 
       - name: Setup LXD
-        uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee
+        uses: canonical/setup-lxd@main
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
 
       - name: Run integration tests
         run: |
-          charmcraft.spread -v "github-ci:ubuntu-24.04:tests/spread/integration/${MATRIX_SUITE}"
-        env:
-          MATRIX_SUITE: ${{ matrix.suite }}
+          charmcraft.spread -v "lxd:ubuntu-24.04:tests/spread/${{ matrix.suite }}"
