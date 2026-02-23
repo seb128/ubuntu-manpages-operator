@@ -15,7 +15,7 @@ from subprocess import CalledProcessError
 import charms.operator_libs_linux.v0.apt as apt
 from charms.operator_libs_linux.v0.apt import PackageError, PackageNotFoundError
 from charms.operator_libs_linux.v1.systemd import service_restart, service_running
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import DictLoader, Environment
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +24,33 @@ RELEASES_PATTERN = re.compile(r"([a-z]+)(?:[,][ ]*)*")
 
 # Directories required by the manpages charm.
 APP_DIR = Path("/app")
-DEB_DIR = APP_DIR / "ubuntu"
 WWW_DIR = APP_DIR / "www"
 BIN_DIR = APP_DIR / "bin"
 
 # Configuration files created by the manpages charm.
 CONFIG_PATH = WWW_DIR / "config.json"
-UPDATE_SERVICE_PATH = Path("/etc/systemd/system/update-manpages.service")
-NGINX_SITE_CONFIG_PATH = Path("/etc/nginx/conf.d/manpages.conf")
 
-# Packages installed as part of the update process.
-PACKAGES = ["nginx-full", "fcgiwrap", "jq", "curl", "w3m"]
+INGEST_SERVICE_PATH = "/etc/systemd/system/ingest-manpages.service"
+INGEST_SERVICE_TEMPLATE = """
+[Unit]
+Description=Ingest Manpages into the Repository
+
+[Service]
+Type=simple
+ExecStart=/app/bin/ingest -config={{ config_path }}
+{{ proxy_config }}
+"""
+
+SERVER_SERVICE_PATH = "/etc/systemd/system/manpages.service"
+SERVER_TEMPLATE = """
+[Unit]
+Description=Manpages Application Server
+
+[Service]
+Type=simple
+ExecStart=/app/bin/server -config={{ config_path }}
+{{ proxy_config }}
+"""
 
 
 @dataclass
@@ -43,7 +59,6 @@ class ManpagesConfig:
 
     site: str = "http://manpages.ubuntu.com"
     archive: str = "http://archive.ubuntu.com/ubuntu"
-    debdir: str = str(DEB_DIR)
     public_html_dir: str = str(WWW_DIR)
     releases: dict = field(
         default_factory=lambda: {
@@ -72,42 +87,23 @@ class Manpages:
             logger.error("failed to update package cache: %s", e)
             raise
 
-        for p in PACKAGES:
-            try:
-                apt.add_package(p)
-            except PackageNotFoundError:
-                logger.error("failed to find package %s in package cache", p)
-                raise
-            except PackageError as e:
-                logger.error("failed to install %s: %s", p, e)
-                raise
+        try:
+            apt.add_package("mandoc")
+        except PackageNotFoundError:
+            logger.error("failed to find package mandoc in package cache")
+            raise
+        except PackageError as e:
+            logger.error("failed to install mandoc: %s", e)
+            raise
 
-        # Get path to charm source, inside which is the app and its configuration
-        source_path = Path(__file__).parent.parent / "app"
+        # Get path to charm source, inside which is the app and its configuration.
+        source_path = Path(__file__).parent.parent
 
-        # Install the web assets and maintenance scripts
+        # Install the binaries and systemd units.
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        (WWW_DIR / "manpages").mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_path / "www", WWW_DIR, dirs_exist_ok=True)
+        WWW_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_path / "bin", BIN_DIR, dirs_exist_ok=True)
-
-        # Install configuration files
-        config_path = source_path / "config"
-        shutil.copy(config_path / "manpages.conf", NGINX_SITE_CONFIG_PATH)
-        self._template_systemd_unit()
-
-        # Remove default nginx configuration
-        Path("/etc/nginx/sites-enables/default").unlink(missing_ok=True)
-
-        # Ensure the "/app" directory is owned by the "www-data" user.
-        for dirpath, dirnames, filenames in os.walk(APP_DIR):
-            shutil.chown(dirpath, "www-data")
-            for filename in filenames:
-                path = Path(dirpath) / Path(filename)
-                try:
-                    shutil.chown(path, "www-data")
-                except FileNotFoundError:
-                    logger.debug("failed to change ownership of '%s'", path)
+        self._template_systemd_units()
 
     def configure(self, releases: str, url: str):
         """Configure the manpages service."""
@@ -118,7 +114,7 @@ class Manpages:
             raise
 
         # Ensure the systemd unit is updated in case the Juju proxy config has changed.
-        self._template_systemd_unit()
+        self._template_systemd_units()
 
         # Write the configuration file for the application.
         with open(CONFIG_PATH, "w") as f:
@@ -127,8 +123,7 @@ class Manpages:
     def restart(self):
         """Restart the manpages services."""
         try:
-            service_restart("nginx")
-            service_restart("fcgiwrap")
+            service_restart("manpages")
         except CalledProcessError as e:
             logger.error("failed to restart manpages services: %s", e)
             raise
@@ -136,7 +131,7 @@ class Manpages:
     def update_manpages(self):
         """Update the manpages."""
         try:
-            service_restart("update-manpages")
+            service_restart("ingest-manpages")
             self.purge_unused_manpages()
         except CalledProcessError as e:
             logger.error("failed to update manpages: %s", e)
@@ -148,6 +143,10 @@ class Manpages:
         If a release is no longer configured in the application config, but
         previously was, this function removes the manpages for that release.
         """
+        # No releases have yet been downloaded, skip this step
+        if not (WWW_DIR / "manpages").exists():
+            return
+
         with open(CONFIG_PATH, "r") as f:
             config = json.load(f)
 
@@ -162,7 +161,7 @@ class Manpages:
     @property
     def updating(self) -> bool:
         """Report whether the manpages are currently being updated."""
-        return service_running("update-manpages")
+        return service_running("ingest-manpages")
 
     def _build_config(self, releases: str, url: str) -> ManpagesConfig:
         """Build a ManpagesConfig object using a set of specified release codenames."""
@@ -182,7 +181,7 @@ class Manpages:
 
         return config
 
-    def _template_systemd_unit(self):
+    def _template_systemd_units(self):
         """Template out systemd unit file including proxy variables."""
         # Maps Juju specific proxy environment variables to system equivalents.
         proxy_vars = [
@@ -203,9 +202,20 @@ class Manpages:
                 lines.append(f"\nEnvironment={v[1].lower()}={proxy}")
 
         # Template out the unit file and write it to disk.
-        env = Environment(loader=FileSystemLoader(Path(__file__).parent.parent / "app" / "config"))
-        template = env.get_template("update-manpages.service.j2")
-        context = {"proxy_config": "\n".join(lines)}
+        env = Environment(
+            loader=DictLoader(
+                {
+                    "ingest-manpages.service.j2": INGEST_SERVICE_TEMPLATE,
+                    "manpages.service.j2": SERVER_TEMPLATE,
+                }
+            )
+        )
+        context = {"proxy_config": "\n".join(lines), "config_path": CONFIG_PATH}
 
-        with open(UPDATE_SERVICE_PATH, "w") as f:
+        template = env.get_template("ingest-manpages.service.j2")
+        with open(INGEST_SERVICE_PATH, "w") as f:
+            f.write(template.render(context))
+
+        template = env.get_template("manpages.service.j2")
+        with open(SERVER_SERVICE_PATH, "w") as f:
             f.write(template.render(context))
