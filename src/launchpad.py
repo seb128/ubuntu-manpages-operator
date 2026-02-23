@@ -9,8 +9,7 @@ from abc import ABC
 from typing import Dict, List, Optional
 
 import httplib2
-import launchpadlib as lplib
-from launchpadlib.launchpad import Launchpad
+from launchpadlib.launchpad import Launchpad, uris
 
 
 class LaunchpadClientBase(ABC):
@@ -38,7 +37,7 @@ class LaunchpadClient(LaunchpadClientBase):
 
         lp = Launchpad.login_anonymously(
             "manpages",
-            lplib.uris.LPNET_SERVICE_ROOT,  # ty: ignore[unresolved-attribute]
+            uris.LPNET_SERVICE_ROOT,
             proxy_info=_proxy_config,
         )
 
