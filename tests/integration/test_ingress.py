@@ -1,46 +1,56 @@
 # Copyright 2025 Canonical
 # See LICENSE file for licensing details.
 
-import jubilant
-from requests import Session
+import json
 
-from . import HAPROXY, MANPAGES, SSC, DNSResolverHTTPSAdapter, retry
+import jubilant
+import requests
+
+from . import MANPAGES, TRAEFIK, retry
 
 
 def deploy_wait_func(status):
     """Wait function to ensure desired state of the model post-deploy."""
     manpages_maint = status.apps[MANPAGES].is_maintenance
     status_message = status.apps[MANPAGES].app_status.message == "Updating manpages"
-    haproxy_active = status.apps[HAPROXY].is_active
-    ssc_active = status.apps[SSC].is_active
-    return manpages_maint and status_message and haproxy_active and ssc_active
+    traefik_active = status.apps[TRAEFIK].is_active
+    return manpages_maint and status_message and traefik_active
 
 
-def test_deploy(juju: jubilant.Juju, manpages_charm):
-    juju.deploy(manpages_charm, app=MANPAGES, config={"releases": "noble"})
-    juju.deploy(HAPROXY, channel="2.8/edge", config={"external-hostname": "manpages.internal"})
-    juju.deploy(SSC, channel="1/edge")
+def test_deploy(juju: jubilant.Juju, manpages_charm, manpages_oci_image):
+    juju.deploy(
+        manpages_charm,
+        app=MANPAGES,
+        config={"releases": "noble"},
+        resources={"manpages-image": manpages_oci_image},
+    )
 
-    juju.integrate(MANPAGES, HAPROXY)
-    juju.integrate(f"{HAPROXY}:certificates", f"{SSC}:certificates")
+    traefik_config = {"routing_mode": "subdomain", "external_hostname": "manpages.internal"}
+    juju.deploy(TRAEFIK, config=traefik_config, trust=True)
+
+    juju.integrate(MANPAGES, TRAEFIK)
 
     juju.wait(deploy_wait_func, timeout=1800)
 
 
+def test_ingress_setup(juju: jubilant.Juju):
+    """Test that Manpages/Traefik are configured correctly."""
+    result = juju.run(f"{TRAEFIK}/0", "show-external-endpoints")
+    j = json.loads(result.results["external-endpoints"])
+
+    model_name = juju.model
+    assert model_name is not None
+    assert j[MANPAGES] == {"url": f"http://{model_name}-{MANPAGES}.manpages.internal/"}
+
+
 @retry(retry_num=24, retry_sleep_sec=5)
-def test_ingress_functions_correctly(juju: jubilant.Juju):
+def test_ingress_functions_correctly(juju: jubilant.Juju, traefik_lb_ip):
     model_name = juju.model
     assert model_name is not None
 
-    haproxy_ip = juju.status().apps[HAPROXY].units[f"{HAPROXY}/0"].public_address
-    external_hostname = "manpages.internal"
-
-    session = Session()
-    session.mount("https://", DNSResolverHTTPSAdapter(external_hostname, haproxy_ip))
-    response = session.get(
-        f"https://{haproxy_ip}/{model_name}-{MANPAGES}/",
-        headers={"Host": external_hostname},
-        verify=False,
+    response = requests.get(
+        f"http://{traefik_lb_ip}/",
+        headers={"Host": f"{model_name}-{MANPAGES}.manpages.internal"},
         timeout=30,
     )
 
