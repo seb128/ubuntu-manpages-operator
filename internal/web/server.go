@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,12 +89,33 @@ type searchResultView struct {
 	Section int
 }
 
+var vcsRevision = readVCSRevision()
+
+func readVCSRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+			return s.Value[:7]
+		}
+	}
+	return ""
+}
+
 func NewServer(cfg *config.Config, logger *slog.Logger) *Server {
-	index := template.Must(template.ParseFS(webAssets, "templates/base.html", "templates/index.html"))
-	searchPage := template.Must(template.ParseFS(webAssets, "templates/base.html", "templates/search.html"))
-	browsePage := template.Must(template.ParseFS(webAssets, "templates/base.html", "templates/browse.html"))
-	manpagePage := template.Must(template.ParseFS(webAssets, "templates/base.html", "templates/manpage.html"))
-	notFound := template.Must(template.ParseFS(webAssets, "templates/base.html", "templates/404.html"))
+	funcMap := template.FuncMap{
+		"commitHash": func() string { return vcsRevision },
+	}
+	parse := func(files ...string) *template.Template {
+		return template.Must(template.New("").Funcs(funcMap).ParseFS(webAssets, files...))
+	}
+	index := parse("templates/base.html", "templates/index.html")
+	searchPage := parse("templates/base.html", "templates/search.html")
+	browsePage := parse("templates/base.html", "templates/browse.html")
+	manpagePage := parse("templates/base.html", "templates/manpage.html")
+	notFound := parse("templates/base.html", "templates/404.html")
 	searcher, err := search.NewSQLiteSearcher(cfg.IndexPath())
 	if err != nil {
 		logger.Warn("search index unavailable", "error", err)
