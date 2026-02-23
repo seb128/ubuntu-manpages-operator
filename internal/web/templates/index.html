@@ -1,26 +1,27 @@
-{{ define "title" }}Ubuntu Manpages{{ end }}
-
-{{ define "head-meta" }}
-    <meta name="description" content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML." />
-    <meta property="og:title" content="Ubuntu Manpages" />
-    <meta property="og:description" content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML." />
-    <meta property="og:url" content="{{ .SiteURL }}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Ubuntu Manpages" />
-    {{ .JSONLD }}
-{{ end }}
-
-{{ define "page-title" }}
+{{ define "title" }}Ubuntu Manpages{{ end }} {{ define "head-meta" }}
+<meta
+  name="description"
+  content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML."
+/>
+<meta property="og:title" content="Ubuntu Manpages" />
+<meta
+  property="og:description"
+  content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML."
+/>
+<meta property="og:url" content="{{ .SiteURL }}" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Ubuntu Manpages" />
+{{ .JSONLD }} {{ end }} {{ define "page-title" }}
 <div class="l-docs__title" id="main-content"></div>
-{{ end }}
-
-{{ define "main" }}
+{{ end }} {{ define "main" }}
 <section class="p-section--hero">
   <div class="row">
     <div class="col-12">
       <h1>Ubuntu Manpage Repository</h1>
       <p>
-        This site contains hundreds of thousands of manpages, extracted from every package of every supported version of Ubuntu. Traditionally manpages are browsed on the command line — this project renders them into a web-browsable format.
+        This site contains hundreds of thousands of manpages, extracted from every package of every
+        supported version of Ubuntu. Traditionally manpages are browsed on the command line — this
+        project renders them into a web-browsable format.
       </p>
     </div>
   </div>
@@ -76,15 +77,15 @@
       <h3 class="p-heading--5">Ubuntu documentation</h3>
       <ul class="p-list">
         <li class="p-list__item"><a href="https://docs.ubuntu.com/">User documentation</a></li>
-        <li class="p-list__item"><a href="https://documentation.ubuntu.com/project/community/">Community documentation</a></li>
-        <li class="p-list__item"><a href="https://documentation.ubuntu.com/ubuntu-for-developers/">Developer documentation</a></li>
+        <li class="p-list__item">
+          <a href="https://documentation.ubuntu.com/project/community/">Community documentation</a>
+        </li>
+        <li class="p-list__item">
+          <a href="https://documentation.ubuntu.com/ubuntu-for-developers/"
+            >Developer documentation</a
+          >
+        </li>
       </ul>
-    </div>
-    <div class="col-6">
-      <h3 class="p-heading--5">About this site</h3>
-      <p>
-        This repository contains hundreds of thousands of manpages, extracted from every package of every supported version of Ubuntu and rendered as browsable HTML.
-      </p>
     </div>
   </div>
 </section>
