@@ -1,0 +1,40 @@
+name: ubuntu-manpages
+version: 0.1.0
+license: Apache-2.0
+base: ubuntu@24.04
+build-base: ubuntu@24.04
+
+platforms:
+  amd64:
+
+summary: An image for fetching and serving Ubuntu manpages on the web.
+description: |
+  ubuntu-manpages is a service for fetching and serving Ubuntu manpages.
+
+  This image ships ubuntu-manpages so that it can be used both for fetching
+  manpages from the upstream, and serving them over HTTP.
+
+services:
+  manpages:
+    override: replace
+    startup: enabled
+    command: /usr/bin/server -config /app/www/config.json
+
+parts:
+  manpages-app:
+    plugin: go
+    source: .
+    build-snaps:
+      - go/1.25/stable
+    stage:
+      - bin/ingest
+      - bin/server
+    organize:
+      ingest: usr/bin/ingest
+      server: usr/bin/server
+
+  mandoc:
+    plugin: nil
+    stage-packages:
+      - ca-certificates
+      - mandoc
