@@ -45,4 +45,7 @@ def test_ingress_functions_correctly(juju: jubilant.Juju):
     )
 
     assert response.status_code == 200
-    assert "Welcome to the Ubuntu Manpage Repository" in response.text
+    assert (
+        '<meta name="description" content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML." />'
+        in response.text
+    )

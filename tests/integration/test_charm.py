@@ -28,7 +28,10 @@ def test_deploy(juju: jubilant.Juju, manpages_charm):
 def test_application_is_up(juju: jubilant.Juju):
     response = requests.get(f"http://{address(juju)}:8080")
     assert response.status_code == 200
-    assert "Welcome to the Ubuntu Manpage Repository" in response.text
+    assert (
+        '<meta name="description" content="Hundreds of thousands of manpages from every package of every supported Ubuntu release, rendered as browsable HTML." />'
+        in response.text
+    )
 
 
 @retry(retry_num=10, retry_sleep_sec=3)

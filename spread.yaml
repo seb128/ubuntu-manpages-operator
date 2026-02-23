@@ -78,8 +78,6 @@ suites:
       if [[ -z "${CI:-}" ]]; then
         concierge restore --trace
         apt autoremove -y --purge
-        rm -Rf "$SPREAD_PATH"
-        mkdir -p "$SPREAD_PATH"
       fi
 
   tests/spread/functional/:
