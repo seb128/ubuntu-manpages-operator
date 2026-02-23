@@ -22,9 +22,8 @@ from manpages import (
     APP_DIR,
     BIN_DIR,
     CONFIG_PATH,
-    NGINX_SITE_CONFIG_PATH,
-    PACKAGES,
-    UPDATE_SERVICE_PATH,
+    INGEST_SERVICE_PATH,
+    SERVER_SERVICE_PATH,
     WWW_DIR,
     Manpages,
     ManpagesConfig,
@@ -40,25 +39,17 @@ def manpages():
 def test_install_manpages(manpages):
     manpages.install()
 
-    # Ensure that packages are installed.
-    for p in PACKAGES:
-        package = apt.DebianPackage.from_system(p)
-        assert package.state == apt.PackageState.Present
+    # Ensure that mandoc is installed.
+    package = apt.DebianPackage.from_system("mandoc")
+    assert package.state == apt.PackageState.Present
 
-    # Ensure the www and bin directories have been created.
-    assert WWW_DIR.exists()
+    # Ensure the app and bin directories have been created.
+    assert APP_DIR.exists()
     assert BIN_DIR.exists()
 
-    # Ensure the nginx config and systemd service have been created.
-    assert NGINX_SITE_CONFIG_PATH.exists()
-    assert UPDATE_SERVICE_PATH.exists()
-
-    assert not Path("/etc/nginx/sites-enables/default").exists(follow_symlinks=False)  # ty: ignore[unknown-argument]
-
-    # Ensure ownership of directories and files was set correctly.
-    assert WWW_DIR.owner() == "www-data"
-    assert BIN_DIR.owner() == "www-data"
-    assert APP_DIR.owner() == "www-data"
+    # Ensure the systemd services have been created.
+    assert Path(INGEST_SERVICE_PATH).exists()
+    assert Path(SERVER_SERVICE_PATH).exists()
 
 
 def test_install_manpages_with_proxy_config(manpages):
@@ -66,9 +57,9 @@ def test_install_manpages_with_proxy_config(manpages):
     os.environ["JUJU_CHARM_HTTPS_PROXY"] = "https://proxy.example.com"
     manpages.install()
 
-    assert UPDATE_SERVICE_PATH.exists()
+    assert Path(INGEST_SERVICE_PATH).exists()
 
-    lines = UPDATE_SERVICE_PATH.read_text().splitlines()
+    lines = Path(INGEST_SERVICE_PATH).read_text().splitlines()
 
     assert "Environment=http_proxy=http://proxy.example.com" in lines
     assert "Environment=HTTP_PROXY=http://proxy.example.com" in lines
@@ -110,9 +101,8 @@ def test_configure_manpages_bad_codename(manpages):
 
 def test_restart_manpages(manpages):
     manpages.restart()
-    assert service_running("nginx")
-    assert service_running("fcgiwrap")
-    assert not service_running("update-manpages")
+    assert service_running("manpages")
+    assert not service_running("ingest-manpages")
 
 
 def test_update_manpages(manpages):

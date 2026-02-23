@@ -2,9 +2,16 @@ summary: Run manpages python module functional tests
 systems:
   - ubuntu-24.04
 
+prepare: |
+  sudo snap install --classic go
+  pushd /root/proj
+  mkdir -p bin/
+  go build -buildvcs=false -o bin/ingest ./cmd/ingest
+  go build -buildvcs=false -o bin/server ./cmd/server
+
 execute: |
   pushd "$SPREAD_PATH"
-  make integration ARGS="tests/functional/test_manpages.py"
+  make functional ARGS="tests/functional/test_manpages.py"
 
 restore: |
   if [[ -z "${CI:-}" ]]; then
