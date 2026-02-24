@@ -1,0 +1,91 @@
+{{ define "title" }}{{ .Title }} | Ubuntu Manpages{{ end }}
+
+{{ define "head-meta" }}
+    <meta name="description" content="Browse Ubuntu manpages: {{ .Title }}" />
+    <link rel="canonical" href="{{ .CanonicalURL }}" />
+    <meta property="og:title" content="{{ .Title }} | Ubuntu Manpages" />
+    <meta property="og:description" content="Browse Ubuntu manpages: {{ .Title }}" />
+    <meta property="og:url" content="{{ .CanonicalURL }}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Ubuntu Manpages" />
+    {{ .JSONLD }}
+{{ end }}
+
+{{ define "page-title" }}
+<div class="l-docs__title" id="main-content">
+  <div class="p-section--shallow">
+    <div class="row">
+      <div class="col-12">
+        <h1>{{ .Title }}</h1>
+        <nav class="p-breadcrumbs" aria-label="Breadcrumb">
+          <ol class="p-breadcrumbs__items">
+            {{ range .Breadcrumbs }}
+            <li class="p-breadcrumbs__item">
+              {{ if .Href }}<a class="p-breadcrumbs__link" href="{{ .Href }}">{{ .Label }}</a>{{ else }}{{ .Label }}{{ end }}
+            </li>
+            {{ end }}
+          </ol>
+        </nav>
+      </div>
+    </div>
+  </div>
+</div>
+{{ end }}
+
+{{ define "main" }}
+<div class="row">
+  <div class="col-12">
+    {{ if .Sections }}
+    <table class="p-table" aria-label="Sections">
+      <thead>
+        <tr>
+          <th>Section</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Sections }}
+        <tr>
+          <td><a href="{{ .Href }}">{{ .Name }}</a></td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+    {{ end }}
+
+    {{ if .Dirs }}
+    <table class="p-table" aria-label="Directories">
+      <thead>
+        <tr>
+          <th>Name</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Dirs }}
+        <tr>
+          <td><a href="{{ .Href }}">{{ .Name }}</a></td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+    {{ end }}
+
+    {{ if .Files }}
+    <p class="u-text--muted">{{ .FileCount }} manpages</p>
+    <table class="p-table" aria-label="Manpages">
+      <thead>
+        <tr>
+          <th>Name</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Files }}
+        <tr>
+          <td><a href="{{ .Href }}">{{ .Name }}</a></td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+    {{ end }}
+  </div>
+</div>
+{{ end }}

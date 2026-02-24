@@ -7,6 +7,8 @@ These tests only cover those methods that do not require internet access,
 and do not attempt to manipulate the underlying machine.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from launchpad import MockLaunchpadClient
@@ -19,7 +21,8 @@ from manpages import (
 @pytest.fixture
 def manpages():
     lp = MockLaunchpadClient()
-    return Manpages(lp)
+    container = MagicMock()
+    return Manpages(lp, container)
 
 
 def test_build_config_successful(manpages):

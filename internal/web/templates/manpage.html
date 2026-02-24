@@ -1,0 +1,96 @@
+{{ define "title" }}Ubuntu Manpage: {{ .Title }}{{ if .Description }} - {{ .Description }}{{ end }}{{ end }}
+
+{{ define "head-meta" }}
+    {{ if .Description }}<meta name="description" content="{{ .Description }}" />{{ end }}
+    <link rel="canonical" href="{{ .CanonicalURL }}" />
+    <meta property="og:title" content="{{ .Title }}" />
+    {{ if .Description }}<meta property="og:description" content="{{ .Description }}" />{{ end }}
+    <meta property="og:url" content="{{ .CanonicalURL }}" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="Ubuntu Manpages" />
+    {{ .JSONLD }}
+{{ end }}
+
+{{ define "sidebar-extra" }}
+{{ if .PathSuffix }}
+<ul>
+  <li><strong>Other versions</strong></li>
+  {{ range .Releases }}
+  <li><a href="/manpages/{{ .Name }}/{{ $.PathSuffix }}">{{ .Label }}</a></li>
+  {{ end }}
+</ul>
+{{ end }}
+{{ end }}
+
+{{ define "page-title" }}
+<div class="l-docs__title" id="main-content">
+  <div class="p-section--shallow">
+    <div class="row">
+      <div class="col-12">
+        {{ if .Breadcrumbs }}
+        <nav class="p-breadcrumbs" aria-label="Breadcrumb">
+          <ol class="p-breadcrumbs__items">
+            {{ range .Breadcrumbs }}
+            <li class="p-breadcrumbs__item">
+              {{ if .Href }}<a class="p-breadcrumbs__link" href="{{ .Href }}">{{ .Label }}</a>{{ else }}{{ .Label }}{{ end }}
+            </li>
+            {{ end }}
+            {{ if .GzipHref }}
+            <li class="p-breadcrumbs__item">
+              <a class="p-breadcrumbs__link" href="{{ .GzipHref }}">{{ .GzipName }}</a>
+            </li>
+            {{ end }}
+          </ol>
+        </nav>
+        {{ end }}
+        <h1>{{ .Title }}</h1>
+        {{ if .Description }}<p class="p-heading--4">{{ .Description }}</p>{{ end }}
+        {{ if .Package }}
+        <ul class="p-inline-list--middot u-text--muted u-no-margin--bottom">
+          <li class="p-inline-list__item">
+            Provided by: {{ if .PackageURL }}<a href="{{ .PackageURL }}">{{ .Package }}</a>{{ else }}{{ .Package }}{{ end }}
+          </li>
+          {{ if .Source }}
+          <li class="p-inline-list__item">
+            Source: {{ if .SourceURL }}<a href="{{ .SourceURL }}">{{ .Source }}</a>{{ else }}{{ .Source }}{{ end }}
+          </li>
+          {{ end }}
+          {{ if .BugURL }}
+          <li class="p-inline-list__item">
+            <a href="{{ .BugURL }}" title="Report a bug in this documentation">Report a bug</a>
+          </li>
+          {{ end }}
+        </ul>
+        {{ end }}
+      </div>
+    </div>
+  </div>
+</div>
+{{ end }}
+
+{{ define "meta" }}
+{{ if .TOC }}
+<div class="l-docs__meta">
+  <div class="l-docs__sticky-container">
+    <aside class="p-table-of-contents">
+      <div class="p-table-of-contents__section">
+        <h2 class="p-table-of-contents__header">On this page</h2>
+        <nav class="p-table-of-contents__nav" aria-label="Table of contents">
+          <ul class="p-table-of-contents__list" id="toc-list">
+            {{ .TOC }}
+          </ul>
+        </nav>
+      </div>
+    </aside>
+  </div>
+</div>
+{{ end }}
+{{ end }}
+
+{{ define "main" }}
+<div class="row">
+  <div class="col-12" id="manpage-content">
+    {{ .Body }}
+  </div>
+</div>
+{{ end }}

@@ -7,198 +7,182 @@ These tests only cover those methods that do not require internet access,
 and do not attempt to manipulate the underlying machine.
 """
 
-from subprocess import CalledProcessError
-from unittest.mock import PropertyMock, patch
+import json
+from unittest import mock
 
 import pytest
-from charms.operator_libs_linux.v0.apt import PackageError, PackageNotFoundError
-from ops.testing import (
-    ActiveStatus,
-    Address,
-    BindAddress,
-    BlockedStatus,
-    Context,
-    MaintenanceStatus,
-    Network,
-    Relation,
-    State,
-    TCPPort,
-)
+from ops import BlockedStatus
+from ops.pebble import Layer, ServiceStatus
+from ops.testing import ActiveStatus, Context, MaintenanceStatus, State, TCPPort
+from scenario import Container
 
 from charm import ManpagesCharm
+from launchpad import MockLaunchpadClient
+from manpages import Manpages
 
 
 @pytest.fixture
-def ctx():
-    return Context(ManpagesCharm)
+def charm():
+    with mock.patch("charm.LaunchpadClient", return_value=MockLaunchpadClient()):
+        yield ManpagesCharm
 
 
 @pytest.fixture
-def base_state(ctx):
-    return State(leader=True)
+def loaded_ctx(charm):
+    ctx = Context(charm)
+    container = Container(name="manpages", can_connect=True)
+    return (ctx, container)
 
 
-@patch("charm.Manpages.install")
-def test_install_success(install_mock, ctx, base_state):
-    install_mock.return_value = True
-    out = ctx.run(ctx.on.install(), base_state)
-    assert out.unit_status == MaintenanceStatus("Installing manpages")
-    assert install_mock.called
+@pytest.fixture
+def loaded_ctx_broken_container(charm):
+    ctx = Context(charm)
+    container = Container(name="manpages", can_connect=False)
+    return (ctx, container)
 
 
-@patch("charm.Manpages.install")
-@pytest.mark.parametrize(
-    "exception", [PackageError, PackageNotFoundError, CalledProcessError(1, "foo")]
-)
-def test_install_failure(mock, exception, ctx, base_state):
-    mock.side_effect = exception
-    out = ctx.run(ctx.on.install(), base_state)
-    assert out.unit_status == BlockedStatus(
-        "Failed to install packages. Check `juju debug-log` for details."
-    )
+def test_manpages_pebble_ready(loaded_ctx):
+    ctx, container = loaded_ctx
+    state = State(containers=[container], config={"releases": "noble"})
+    manpages = Manpages(None, container)
+
+    result = ctx.run(ctx.on.pebble_ready(container=container), state)
+
+    assert result.get_container("manpages").layers["manpages"] == manpages.pebble_layer()
+    assert result.get_container("manpages").service_statuses == {
+        "manpages": ServiceStatus.ACTIVE,
+        "ingest": ServiceStatus.ACTIVE,
+    }
+    assert result.opened_ports == frozenset({TCPPort(8080)})
+    assert result.unit_status == MaintenanceStatus("Updating manpages")
 
 
-@patch("charm.Manpages.install")
-def test_upgrade_success(install_mock, ctx, base_state):
-    install_mock.return_value = True
-    out = ctx.run(ctx.on.upgrade_charm(), base_state)
-    assert out.unit_status == MaintenanceStatus("Installing manpages")
-    assert install_mock.called
+def test_manpages_config_changed(loaded_ctx):
+    ctx, container = loaded_ctx
+    state = State(containers=[container], config={"releases": "noble"})
+
+    # Start with intial config changed to populate the config file in the container.
+    result = ctx.run(ctx.on.config_changed(), state)
+    container_root_fs = result.get_container(container.name).get_filesystem(ctx)
+    cfg_file = container_root_fs / "app" / "www" / "config.json"
+    cfg_json = json.loads(cfg_file.read_text())
+
+    # Ensure the config file is correctly rendered with the noble release.
+    assert cfg_json == {
+        "site": "http://192.0.2.0:8080",
+        "archive": "http://archive.ubuntu.com/ubuntu",
+        "public_html_dir": "/app/www",
+        "releases": {"noble": "24.04"},
+        "repos": ["main", "restricted", "universe", "multiverse"],
+        "arch": "amd64",
+    }
+
+    # Run config changed with a new release
+    state = State(containers=[container], config={"releases": "questing"})
+    result = ctx.run(ctx.on.config_changed(), state)
+    container_root_fs = result.get_container(container.name).get_filesystem(ctx)
+    cfg_file = container_root_fs / "app" / "www" / "config.json"
+    cfg_json = json.loads(cfg_file.read_text())
+
+    # Ensure the nwe config file reflects the new release and old release is removed.
+    assert cfg_json == {
+        "site": "http://192.0.2.0:8080",
+        "archive": "http://archive.ubuntu.com/ubuntu",
+        "public_html_dir": "/app/www",
+        "releases": {"questing": "25.10"},
+        "repos": ["main", "restricted", "universe", "multiverse"],
+        "arch": "amd64",
+    }
 
 
-@patch("charm.Manpages.install")
-@pytest.mark.parametrize(
-    "exception", [PackageError, PackageNotFoundError, CalledProcessError(1, "foo")]
-)
-def test_upgrade_failure(mock, exception, ctx, base_state):
-    mock.side_effect = exception
-    out = ctx.run(ctx.on.upgrade_charm(), base_state)
-    assert out.unit_status == BlockedStatus(
-        "Failed to install packages. Check `juju debug-log` for details."
-    )
+def test_manpages_config_changed_purges_old_releases(loaded_ctx):
+    ctx, container = loaded_ctx
+    state = State(containers=[container], config={"releases": "noble"})
+
+    result = ctx.run(ctx.on.config_changed(), state)
+
+    container_root_fs = result.get_container(container.name).get_filesystem(ctx)
+    noble_dir = container_root_fs / "app" / "www" / "manpages" / "noble"
+    # Simulate the actual fetch from online happening and populating the noble directory.
+    noble_dir.mkdir(parents=True, exist_ok=True)
+    assert noble_dir.exists()
+
+    # Reconfigure to remove the noble release and check the directory is pruned.
+    state = State(containers=[container], config={"releases": "questing"})
+    result = ctx.run(ctx.on.config_changed(), state)
+
+    container_root_fs = result.get_container(container.name).get_filesystem(ctx)
+    noble_dir = container_root_fs / "app" / "www" / "manpages" / "noble"
+    assert not noble_dir.exists()
 
 
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_config_changed(update_manpages_mock, configure_mock, ctx, base_state):
-    out = ctx.run(ctx.on.config_changed(), base_state)
-    assert out.unit_status == MaintenanceStatus("Updating manpages")
-    assert configure_mock.called
-    assert update_manpages_mock.called
+def test_manpages_config_changed_invalid_value(loaded_ctx):
+    ctx, container = loaded_ctx
+    state = State(containers=[container], config={"releases": "foobarbaz"})
+    result = ctx.run(ctx.on.config_changed(), state)
 
-
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_update_manpages_action(update_manpages_mock, configure_mock, ctx, base_state):
-    out = ctx.run(ctx.on.action("update-manpages"), base_state)
-    assert out.unit_status == MaintenanceStatus("Updating manpages")
-    assert configure_mock.called
-    assert update_manpages_mock.called
-
-
-@patch("charm.Manpages.configure")
-def test_config_changed_failed_bad_config(configure_mock, ctx, base_state):
-    configure_mock.side_effect = ValueError
-    out = ctx.run(ctx.on.config_changed(), base_state)
-    assert out.unit_status == BlockedStatus(
+    assert result.unit_status == BlockedStatus(
         "Invalid configuration. Check `juju debug-log` for details."
     )
 
 
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_config_changed_failed_bad_update(update_manpages_mock, configure_mock, ctx, base_state):
-    update_manpages_mock.side_effect = CalledProcessError(1, "foo")
-    out = ctx.run(ctx.on.config_changed(), base_state)
-    assert configure_mock.called
-    assert out.unit_status == MaintenanceStatus(
-        "Failed to update manpages. Check `juju debug-log` for details."
+def test_manpages_config_changed_no_pebble(loaded_ctx_broken_container):
+    ctx, container = loaded_ctx_broken_container
+    state = State(containers=[container], config={"releases": "noble"})
+    result = ctx.run(ctx.on.config_changed(), state)
+
+    assert result.unit_status == BlockedStatus(
+        "Failed to connect to workload container. Check `juju debug-log` for details."
     )
 
 
-@patch("charm.Manpages.restart")
-def test_start_success(restart_mock, ctx, base_state):
-    out = ctx.run(ctx.on.start(), base_state)
-    assert out.unit_status == ActiveStatus()
-    assert restart_mock.called
-    assert out.opened_ports == {TCPPort(port=8080, protocol="tcp")}
-
-
-@patch("charm.Manpages.restart")
-@pytest.mark.parametrize("exception", [CalledProcessError(1, "foo")])
-def test_start_failure(mock, exception, ctx, base_state):
-    mock.side_effect = exception
-    out = ctx.run(ctx.on.start(), base_state)
-    assert out.unit_status == BlockedStatus(
-        "Failed to start services. Check `juju debug-log` for details."
-    )
-    assert out.opened_ports == frozenset()
-
-
-@patch("charm.Manpages.updating", new_callable=PropertyMock)
-def test_update_status_updating(updating_mock, ctx, base_state):
-    updating_mock.return_value = True
-    out = ctx.run(ctx.on.update_status(), base_state)
-    assert out.unit_status == MaintenanceStatus("Updating manpages")
-    assert updating_mock.called
-
-
-@patch("charm.Manpages.updating", new_callable=PropertyMock)
-def test_update_status_idle(updating_mock, ctx, base_state):
-    updating_mock.return_value = False
-    out = ctx.run(ctx.on.update_status(), base_state)
-    assert out.unit_status == ActiveStatus()
-    assert updating_mock.called
-
-
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_ingress_no_ingress_workload_url(update_manpages_mock, configure_mock):
-    ctx = Context(ManpagesCharm)
-
-    state = State(config={"releases": "noble"})
-    ctx.run(ctx.on.config_changed(), state)
-
-    configure_mock.assert_called_with("noble", "http://192.0.2.0:8080")
-
-
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_ingress_relation_no_ingress_juju_info_binding(update_manpages_mock, configure_mock):
-    ctx = Context(ManpagesCharm)
-
-    state = State(
-        config={"releases": "noble"},
-        networks={Network("juju-info", [BindAddress([Address("10.10.10.10")])])},
-    )
-    ctx.run(ctx.on.config_changed(), state)
-
-    configure_mock.assert_called_with("noble", "http://10.10.10.10:8080")
-
-
-@patch("charm.Manpages.configure")
-@patch("charm.Manpages.update_manpages")
-def test_ingress_relation_updates_workload_config(update_manpages_mock, configure_mock):
-    rel = Relation(
-        endpoint="ingress",
-        interface="ingress",
-        remote_app_name="haproxy",
-        local_unit_data={
-            "model": "testing",
-            "name": "ubuntu-manpages",
-            "port": "8080",
-            "strip-prefix": "true",
+def test_manpages_update_status_updating(loaded_ctx):
+    ctx, container = loaded_ctx
+    container = Container(
+        name="manpages",
+        can_connect=True,
+        layers={
+            "manpages": Layer(
+                {
+                    "services": {
+                        "ingest": {
+                            "override": "replace",
+                            "command": "/usr/bin/ingest -config=/app/www/config.json",
+                            "startup": "enabled",
+                        },
+                    },
+                }
+            )
         },
-        remote_app_data={
-            "ingress": '{"url": "https://manpages.internal/testing-ubuntu-manpages/"}'
+        service_statuses={"ingest": ServiceStatus.ACTIVE},
+    )
+    state = State(containers=[container], config={"releases": "noble"})
+    result = ctx.run(ctx.on.update_status(), state)
+
+    assert result.unit_status == MaintenanceStatus("Updating manpages")
+
+
+def test_manpages_update_status_not_updating(loaded_ctx):
+    ctx, container = loaded_ctx
+    container = Container(
+        name="manpages",
+        can_connect=True,
+        layers={
+            "manpages": Layer(
+                {
+                    "services": {
+                        "ingest": {
+                            "override": "replace",
+                            "command": "/usr/bin/ingest -config=/app/www/config.json",
+                            "startup": "enabled",
+                        },
+                    },
+                }
+            )
         },
+        service_statuses={"ingest": ServiceStatus.INACTIVE},
     )
+    state = State(containers=[container], config={"releases": "noble"})
+    result = ctx.run(ctx.on.update_status(), state)
 
-    ctx = Context(ManpagesCharm)
-
-    state = State(relations=[rel], config={"releases": "noble"})
-    ctx.run(ctx.on.config_changed(), state)
-
-    configure_mock.assert_called_with(
-        "noble", "https://manpages.internal/testing-ubuntu-manpages/"
-    )
+    assert result.unit_status == ActiveStatus()

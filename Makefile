@@ -17,13 +17,10 @@ lint:
 	uv tool run ruff check $(ALL)
 	uv tool run ruff format --check --diff $(ALL)
 	uv run --all-extras ty check $(SRC) $(TESTS)
-	shellcheck $(PROJECT)app/bin/*
-	shfmt -d $(PROJECT)app/bin/*
 
 format:
 	uv tool run ruff check --fix $(ALL)
 	uv tool run ruff format $(ALL)
-	shfmt -l -w $(PROJECT)app/bin/*
 
 unit:
 	uv run --all-extras \

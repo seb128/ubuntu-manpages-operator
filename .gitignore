@@ -11,3 +11,25 @@ __pycache__/
 requirements*.txt
 .spread*
 src/test.py
+scripts/
+
+# Go build output
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test output
+*.test
+*.out
+
+# Go module cache
+/pkg/mod/
+
+# Binary files 
+ingest
+ingest-pkg
+server

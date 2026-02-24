@@ -7,34 +7,19 @@ import json
 import logging
 import os
 import re
-import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from subprocess import CalledProcessError
 
-import charms.operator_libs_linux.v0.apt as apt
-from charms.operator_libs_linux.v0.apt import PackageError, PackageNotFoundError
-from charms.operator_libs_linux.v1.systemd import service_restart, service_running
-from jinja2 import Environment, FileSystemLoader
+import ops
+from ops.pebble import APIError, ConnectionError, PathError, ProtocolError
 
 logger = logging.getLogger(__name__)
 
 # Used to fetch release codenames from the config string passed to the charm.
 RELEASES_PATTERN = re.compile(r"([a-z]+)(?:[,][ ]*)*")
-
-# Directories required by the manpages charm.
-APP_DIR = Path("/app")
-DEB_DIR = APP_DIR / "ubuntu"
-WWW_DIR = APP_DIR / "www"
-BIN_DIR = APP_DIR / "bin"
-
-# Configuration files created by the manpages charm.
+WWW_DIR = Path("/app") / "www"
 CONFIG_PATH = WWW_DIR / "config.json"
-UPDATE_SERVICE_PATH = Path("/etc/systemd/system/update-manpages.service")
-NGINX_SITE_CONFIG_PATH = Path("/etc/nginx/conf.d/manpages.conf")
-
-# Packages installed as part of the update process.
-PACKAGES = ["nginx-full", "fcgiwrap", "jq", "curl", "w3m"]
+PORT = 8080
 
 
 @dataclass
@@ -43,7 +28,6 @@ class ManpagesConfig:
 
     site: str = "http://manpages.ubuntu.com"
     archive: str = "http://archive.ubuntu.com/ubuntu"
-    debdir: str = str(DEB_DIR)
     public_html_dir: str = str(WWW_DIR)
     releases: dict = field(
         default_factory=lambda: {
@@ -61,53 +45,46 @@ class ManpagesConfig:
 class Manpages:
     """Represent a manpages instance in the workload."""
 
-    def __init__(self, launchpad_client):
+    def __init__(self, launchpad_client, container: ops.Container):
         self.launchpad_client = launchpad_client
+        self.container = container
 
-    def install(self):
-        """Install manpages."""
-        try:
-            apt.update()
-        except CalledProcessError as e:
-            logger.error("failed to update package cache: %s", e)
-            raise
-
-        for p in PACKAGES:
-            try:
-                apt.add_package(p)
-            except PackageNotFoundError:
-                logger.error("failed to find package %s in package cache", p)
-                raise
-            except PackageError as e:
-                logger.error("failed to install %s: %s", p, e)
-                raise
-
-        # Get path to charm source, inside which is the app and its configuration
-        source_path = Path(__file__).parent.parent / "app"
-
-        # Install the web assets and maintenance scripts
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        (WWW_DIR / "manpages").mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_path / "www", WWW_DIR, dirs_exist_ok=True)
-        shutil.copytree(source_path / "bin", BIN_DIR, dirs_exist_ok=True)
-
-        # Install configuration files
-        config_path = source_path / "config"
-        shutil.copy(config_path / "manpages.conf", NGINX_SITE_CONFIG_PATH)
-        self._template_systemd_unit()
-
-        # Remove default nginx configuration
-        Path("/etc/nginx/sites-enables/default").unlink(missing_ok=True)
-
-        # Ensure the "/app" directory is owned by the "www-data" user.
-        for dirpath, dirnames, filenames in os.walk(APP_DIR):
-            shutil.chown(dirpath, "www-data")
-            for filename in filenames:
-                path = Path(dirpath) / Path(filename)
-                try:
-                    shutil.chown(path, "www-data")
-                except FileNotFoundError:
-                    logger.debug("failed to change ownership of '%s'", path)
+    def pebble_layer(self) -> ops.pebble.Layer:
+        """Return a Pebble layer for managing manpages server and ingestion."""
+        proxy_env = {
+            "HTTP_PROXY": os.environ.get("JUJU_CHARM_HTTP_PROXY", ""),
+            "HTTPS_PROXY": os.environ.get("JUJU_CHARM_HTTPS_PROXY", ""),
+            "NO_PROXY": os.environ.get("JUJU_CHARM_NO_PROXY", ""),
+        }
+        return ops.pebble.Layer(
+            {
+                "services": {
+                    "manpages": {
+                        "override": "replace",
+                        "summary": "manpages server",
+                        "command": "/usr/bin/server -config=/app/www/config.json",
+                        "startup": "enabled",
+                    },
+                    "ingest": {
+                        "override": "replace",
+                        "summary": "manpages ingestion",
+                        "command": "/usr/bin/ingest -config=/app/www/config.json",
+                        "startup": "enabled",
+                        "on-success": "ignore",
+                        "environment": proxy_env,
+                    },
+                },
+                "checks": {
+                    "up": {
+                        "override": "replace",
+                        "level": "alive",
+                        "period": "30s",
+                        "tcp": {"port": PORT},
+                        "startup": "enabled",
+                    },
+                },
+            }
+        )
 
     def configure(self, releases: str, url: str):
         """Configure the manpages service."""
@@ -117,29 +94,20 @@ class Manpages:
             logger.error("failed to build manpages configuration: invalid releases spec: %s", e)
             raise
 
-        # Ensure the systemd unit is updated in case the Juju proxy config has changed.
-        self._template_systemd_unit()
-
         # Write the configuration file for the application.
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(asdict(config), f)
-
-    def restart(self):
-        """Restart the manpages services."""
         try:
-            service_restart("nginx")
-            service_restart("fcgiwrap")
-        except CalledProcessError as e:
-            logger.error("failed to restart manpages services: %s", e)
+            self.container.push(CONFIG_PATH, json.dumps(asdict(config)), make_dirs=True)
+        except (ProtocolError, ConnectionError, PathError, APIError) as e:
+            logger.error("failed to push manpages configuration to container: %s", e)
             raise
 
     def update_manpages(self):
         """Update the manpages."""
         try:
-            service_restart("update-manpages")
+            self.container.restart("ingest")
             self.purge_unused_manpages()
-        except CalledProcessError as e:
-            logger.error("failed to update manpages: %s", e)
+        except (ProtocolError, ConnectionError, APIError) as e:
+            logger.error("failed to ingest manpages: %s", e)
             raise
 
     def purge_unused_manpages(self):
@@ -148,21 +116,51 @@ class Manpages:
         If a release is no longer configured in the application config, but
         previously was, this function removes the manpages for that release.
         """
-        with open(CONFIG_PATH, "r") as f:
-            config = json.load(f)
+        # No releases have yet been downloaded, skip this step
+        try:
+            if not self.container.exists(WWW_DIR / "manpages"):
+                return
+        except (ProtocolError, ConnectionError, APIError) as e:
+            logger.error("failed to check existence of manpages directory: %s", e)
+            raise
 
+        try:
+            config = self.container.pull(str(CONFIG_PATH)).read()
+        except (ProtocolError, ConnectionError, APIError) as e:
+            logger.error("failed to pull manpages configuration: %s", e)
+            raise
+
+        config = json.loads(config)
         configured_releases = config["releases"].keys()
-        releases_on_disk = [f.name for f in os.scandir(WWW_DIR / "manpages") if f.is_dir()]
+
+        try:
+            files = self.container.list_files(WWW_DIR / "manpages")
+        except (ProtocolError, ConnectionError, PathError, APIError) as e:
+            logger.error("failed to list manpages directory: %s", e)
+            raise
+
+        releases_on_disk = [f.name for f in files if f.type == ops.pebble.FileType.DIRECTORY]
 
         for release in releases_on_disk:
-            if release not in configured_releases:
-                logger.info("purging manpages for '%s'", release)
-                shutil.rmtree(WWW_DIR / "manpages" / release)
+            if release in configured_releases:
+                continue
+
+            logger.info("purging manpages for '%s'", release)
+            try:
+                self.container.remove_path(WWW_DIR / "manpages" / release)
+            except (ProtocolError, ConnectionError, PathError, APIError) as e:
+                logger.error("failed to remove manpages for '%s': %s", release, e)
+                raise
 
     @property
     def updating(self) -> bool:
         """Report whether the manpages are currently being updated."""
-        return service_running("update-manpages")
+        try:
+            running = self.container.get_service("ingest").is_running()
+            return running
+        except (ProtocolError, ConnectionError, APIError, ops.ModelError) as e:
+            logger.error("failed to get manpages ingest service status: %s", e)
+            return False
 
     def _build_config(self, releases: str, url: str) -> ManpagesConfig:
         """Build a ManpagesConfig object using a set of specified release codenames."""
@@ -181,31 +179,3 @@ class Manpages:
             raise ValueError(f"failed to build manpages config: {e}")
 
         return config
-
-    def _template_systemd_unit(self):
-        """Template out systemd unit file including proxy variables."""
-        # Maps Juju specific proxy environment variables to system equivalents.
-        proxy_vars = [
-            ("JUJU_CHARM_HTTP_PROXY", "HTTP_PROXY"),
-            ("JUJU_CHARM_HTTPS_PROXY", "HTTPS_PROXY"),
-            ("JUJU_CHARM_NO_PROXY", "NO_PROXY"),
-        ]
-
-        # Iterate over the possible proxy variables, and if a value is set,
-        # construct a systemd 'Environment' line and add to the list of lines.
-        # Add both upper and lower case to account for expectations of different applications
-        # e.g. curl only accepts the lower case form of "http_proxy"
-        # https://everything.curl.dev/usingcurl/proxies/env.html#http_proxy-in-lower-case-only
-        lines = []
-        for v in proxy_vars:
-            if proxy := os.environ.get(v[0], None):
-                lines.append(f"\nEnvironment={v[1]}={proxy}")
-                lines.append(f"\nEnvironment={v[1].lower()}={proxy}")
-
-        # Template out the unit file and write it to disk.
-        env = Environment(loader=FileSystemLoader(Path(__file__).parent.parent / "app" / "config"))
-        template = env.get_template("update-manpages.service.j2")
-        context = {"proxy_config": "\n".join(lines)}
-
-        with open(UPDATE_SERVICE_PATH, "w") as f:
-            f.write(template.render(context))

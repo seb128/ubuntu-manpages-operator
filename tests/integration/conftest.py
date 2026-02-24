@@ -6,7 +6,10 @@ import subprocess
 from pathlib import Path
 
 import jubilant
+import yaml
 from pytest import fixture
+
+from . import TRAEFIK
 
 
 @fixture(scope="module")
@@ -34,3 +37,34 @@ def manpages_charm(request):
     )
 
     return next(Path.glob(Path(working_dir), "*.charm")).absolute()
+
+
+@fixture(scope="module")
+def manpages_oci_image():
+    meta = yaml.safe_load(Path("./charmcraft.yaml").read_text())
+    return meta["resources"]["manpages-image"]["upstream-source"]
+
+
+@fixture(scope="module")
+def traefik_lb_ip(juju: jubilant.Juju):
+    model_name = juju.model
+    assert model_name is not None
+
+    proc = subprocess.run(
+        [
+            "/snap/bin/kubectl",
+            "-n",
+            model_name,
+            "get",
+            "service",
+            f"{TRAEFIK}-lb",
+            "-o=jsonpath='{.status.loadBalancer.ingress[0].ip}'",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    ip_address = proc.stdout.strip("'")
+    return ip_address
